@@ -4,6 +4,7 @@ import json
 import re
 import random
 from deep_translator import GoogleTranslator
+from werkzeug.urls import url_quote
 
 app = Flask(__name__)
 CORS(app)
