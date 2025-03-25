@@ -11,30 +11,81 @@ app = Flask(__name__)
 CORS(app)
 
 def load_json_data():
-    """載入分割的 JSON 檔案"""
+    """載入分割的 JSON 檔案，增加容錯處理"""
     base_dir = os.path.dirname(__file__)
     
-    # 使用字母排序模式
-    part_files = glob.glob(os.path.join(base_dir, "output_part[a-m].json"))
+    # 使用更寬鬆的檔案模式
+    part_files = glob.glob(os.path.join(base_dir, "output_part*.json"))
     
-    # 依字母順序排序
-    part_files.sort()
+    # 依字母或數字順序排序
+    def extract_number(filename):
+        # 同時支持字母和數字排序
+        match = re.search(r'output_part([a-zA-Z0-9]+)\.json', os.path.basename(filename))
+        return match.group(1) if match else filename
+
+    part_files.sort(key=extract_number)
     
     # 合併 JSON 資料
     combined_data = []
     for file in part_files:
         try:
             with open(file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                combined_data.extend(data)
+                # 讀取整個檔案內容
+                content = f.read()
+                
+                # 清理可能的異常字元
+                cleaned_content = ''.join(char for char in content if ord(char) < 128 or char in '\n\r\t[]{},:"\' ')
+                
+                try:
+                    # 嘗試解析 JSON
+                    data = json.loads(cleaned_content)
+                    
+                    # 確保是列表
+                    if not isinstance(data, list):
+                        data = [data]
+                    
+                    # 篩選有效的資料項
+                    valid_data = []
+                    for item in data:
+                        if isinstance(item, dict) and 'prompt' in item:
+                            valid_data.append(item)
+                    
+                    combined_data.extend(valid_data)
+                    print(f"成功載入 {file}: {len(valid_data)} 筆有效資料")
+                
+                except json.JSONDecodeError as je:
+                    print(f"JSON解析錯誤 {file}: {je}")
+                    # 嘗試手動修復
+                    try:
+                        # 使用正則表達式提取 JSON 物件
+                        matches = re.findall(r'\{[^{}]+\}', cleaned_content)
+                        valid_items = []
+                        for match in matches:
+                            try:
+                                item = json.loads(match)
+                                if 'prompt' in item:
+                                    valid_items.append(item)
+                            except:
+                                continue
+                        
+                        combined_data.extend(valid_items)
+                        print(f"通過正則表達式部分修復 {file}: {len(valid_items)} 筆資料")
+                    
+                    except Exception as e:
+                        print(f"修復 {file} 失敗: {e}")
+        
         except Exception as e:
             print(f"載入 {file} 時出錯: {e}")
     
-    print(f"成功載入 {len(combined_data)} 筆對話資料")
+    print(f"總共成功載入 {len(combined_data)} 筆對話資料")
     return combined_data
 
 # 載入資料
-chatbot_data = load_json_data()
+try:
+    chatbot_data = load_json_data()
+except Exception as e:
+    print(f"載入資料時發生critical錯誤: {e}")
+    chatbot_data = []
 
 def detect_language(text):
     """改進的語言檢測"""
@@ -137,6 +188,10 @@ def find_semantic_matches(query, language=None, top_n=3):
     for item in chatbot_data:
         # 語言過濾
         if language and language != "auto" and item.get('language', '').lower() != language.lower():
+            continue
+        
+        # 確保 item 有必要的欄位
+        if not isinstance(item, dict) or 'prompt' not in item:
             continue
         
         item_prompt = item['prompt'].lower()
@@ -276,7 +331,7 @@ def get_languages():
     """取得可用語言列表"""
     languages = set()
     for item in chatbot_data:
-        if 'language' in item and item['language']:
+        if isinstance(item, dict) and 'language' in item and item['language']:
             languages.add(item['language'])
     languages.add("auto")
     return jsonify(sorted(list(languages)))
