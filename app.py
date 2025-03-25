@@ -12,7 +12,7 @@ CORS(app)  # 允許跨域請求
 
 # 設定 JSON 檔案路徑
 LOCAL_JSON_PATH = "output.json"
-GOOGLE_DRIVE_URL = "https://drive.google.com/file/d/1iOn2kX-x3RrsVWCvAoMX-sVsjKk8qqn2/view?usp=drive_link"
+GOOGLE_DRIVE_URL = "https://drive.google.com/file/d/1iOn2kX-x3RrsVWCvAoMX-sVsjKk8qqn2/view?usp=sharing"
 
 # 載入 JSON 資料
 def load_data():
