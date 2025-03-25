@@ -4,7 +4,7 @@ from flask_cors import CORS
 import os
 import random
 from deep_translator import GoogleTranslator
-import gdown
+import requests
 
 # 創建 Flask 應用實例
 app = Flask(__name__)
@@ -12,7 +12,7 @@ CORS(app)  # 允許跨域請求
 
 # 設定 JSON 檔案路徑
 LOCAL_JSON_PATH = "output.json"
-GOOGLE_DRIVE_URL = "https://drive.google.com/file/d/1iOn2kX-x3RrsVWCvAoMX-sVsjKk8qqn2/view?usp=sharing"
+GOOGLE_DRIVE_URL = "https://drive.usercontent.google.com/download?id=1iOn2kX-x3RrsVWCvAoMX-sVsjKk8qqn2&export=download&authuser=2"
 
 # 載入 JSON 資料
 def load_data():
@@ -20,14 +20,28 @@ def load_data():
         # 檢查本地是否已有文件
         if not os.path.exists(LOCAL_JSON_PATH):
             print("從 Google Drive 下載 JSON 檔案...")
-            # 將共享連結轉換為直接下載連結
-            file_id = "1iOn2kX-x3RrsVWCvAoMX-sVsjKk8qqn2"
-            gdown.download(f"https://drive.google.com/uc?id={file_id}", LOCAL_JSON_PATH, quiet=False)
-            print("下載完成")
+            
+            # 使用直接下載連結
+            print(f"嘗試從URL下載: {GOOGLE_DRIVE_URL}")
+            r = requests.get(GOOGLE_DRIVE_URL)
+            
+            if r.status_code == 200:
+                with open(LOCAL_JSON_PATH, 'wb') as f:
+                    f.write(r.content)
+                print(f"下載完成，檔案大小: {len(r.content)} 位元組")
+            else:
+                print(f"下載失敗，狀態碼: {r.status_code}")
         
         # 從本地讀取檔案
-        with open(LOCAL_JSON_PATH, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        if os.path.exists(LOCAL_JSON_PATH):
+            with open(LOCAL_JSON_PATH, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                print(f"成功讀取JSON，包含 {len(data)} 筆資料")
+                return data
+        else:
+            print("檔案不存在，返回空列表")
+            return []
+            
     except Exception as e:
         print(f"載入 JSON 檔案時出錯: {e}")
         return []
