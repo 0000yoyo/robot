@@ -1,91 +1,100 @@
 from flask import Flask, send_from_directory, request, jsonify
 from flask_cors import CORS
 import json
-import os
-import glob
 import re
 import random
+import requests
+import concurrent.futures
 from deep_translator import GoogleTranslator
 
 app = Flask(__name__)
 CORS(app)
 
-def load_json_data():
-    """載入分割的 JSON 檔案，增加容錯處理"""
-    base_dir = os.path.dirname(__file__)
-    
-    # 使用更寬鬆的檔案模式
-    part_files = glob.glob(os.path.join(base_dir, "output_part*.json"))
-    
-    # 依字母或數字順序排序
-    def extract_number(filename):
-        # 同時支持字母和數字排序
-        match = re.search(r'output_part([a-zA-Z0-9]+)\.json', os.path.basename(filename))
-        return match.group(1) if match else filename
+def extract_file_id(share_link):
+    """從 Google Drive 分享連結中提取檔案 ID"""
+    match = re.search(r'/d/([a-zA-Z0-9_-]+)/', share_link)
+    return match.group(1) if match else None
 
-    part_files.sort(key=extract_number)
+def load_json_from_google_drive(file_id):
+    """從 Google Drive 下載並解析 JSON 檔案"""
+    download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
     
-    # 合併 JSON 資料
-    combined_data = []
-    for file in part_files:
-        try:
-            with open(file, 'r', encoding='utf-8') as f:
-                # 讀取整個檔案內容
-                content = f.read()
-                
-                # 清理可能的異常字元
-                cleaned_content = ''.join(char for char in content if ord(char) < 128 or char in '\n\r\t[]{},:"\' ')
-                
-                try:
-                    # 嘗試解析 JSON
-                    data = json.loads(cleaned_content)
-                    
-                    # 確保是列表
-                    if not isinstance(data, list):
-                        data = [data]
-                    
-                    # 篩選有效的資料項
-                    valid_data = []
-                    for item in data:
-                        if isinstance(item, dict) and 'prompt' in item:
-                            valid_data.append(item)
-                    
-                    combined_data.extend(valid_data)
-                    print(f"成功載入 {file}: {len(valid_data)} 筆有效資料")
-                
-                except json.JSONDecodeError as je:
-                    print(f"JSON解析錯誤 {file}: {je}")
-                    # 嘗試手動修復
-                    try:
-                        # 使用正則表達式提取 JSON 物件
-                        matches = re.findall(r'\{[^{}]+\}', cleaned_content)
-                        valid_items = []
-                        for match in matches:
-                            try:
-                                item = json.loads(match)
-                                if 'prompt' in item:
-                                    valid_items.append(item)
-                            except:
-                                continue
-                        
-                        combined_data.extend(valid_items)
-                        print(f"通過正則表達式部分修復 {file}: {len(valid_items)} 筆資料")
-                    
-                    except Exception as e:
-                        print(f"修復 {file} 失敗: {e}")
+    try:
+        response = requests.get(download_url)
+        response.raise_for_status()
         
+        # 解析 JSON 資料
+        data = response.json()
+        
+        # 篩選有效資料
+        valid_data = [
+            item for item in data 
+            if isinstance(item, dict) and 'prompt' in item
+        ]
+        
+        print(f"成功載入: {len(valid_data)} 筆有效資料")
+        return valid_data
+    
+    except Exception as e:
+        print(f"載入資料時出錯: {e}")
+        return []
+
+def load_json_from_multiple_urls():
+    """從多個 Google Drive 連結載入資料"""
+    # 12個連結的列表 - 請替換為實際連結
+    share_links = [
+        "https://drive.google.com/file/d/1UANJMZZI958NSVLXiqICv1kqQHQ7wWmP/view?usp=sharing",
+        # 其他連結...
+    ]
+    
+    # 合併的資料列表
+    combined_data = []
+    
+    # 提取檔案 ID 並下載
+    def fetch_file(share_link):
+        try:
+            file_id = extract_file_id(share_link)
+            if file_id:
+                return load_json_from_google_drive(file_id)
+            return []
         except Exception as e:
-            print(f"載入 {file} 時出錯: {e}")
+            print(f"載入 {share_link} 時出錯: {e}")
+            return []
+    
+    # 使用 ThreadPoolExecutor 並行下載
+    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
+        # 提交所有下載任務
+        future_to_url = {executor.submit(fetch_file, url): url for url in share_links}
+        
+        # 處理每個下載結果
+        for future in concurrent.futures.as_completed(future_to_url):
+            url = future_to_url[future]
+            try:
+                data = future.result()
+                combined_data.extend(data)
+                print(f"成功載入 {url}: {len(data)} 筆有效資料")
+            except Exception as e:
+                print(f"處理 {url} 時出錯: {e}")
     
     print(f"總共成功載入 {len(combined_data)} 筆對話資料")
     return combined_data
 
 # 載入資料
 try:
-    chatbot_data = load_json_data()
+    chatbot_data = load_json_from_multiple_urls()
+    if not chatbot_data:
+        raise ValueError("未載入任何有效資料")
 except Exception as e:
     print(f"載入資料時發生critical錯誤: {e}")
-    chatbot_data = []
+    # 提供一個預設的空資料集
+    chatbot_data = [
+        {
+            "prompt": "Hello",
+            "response_a": "Hi there, how can I help you?",
+            "response_b": "Welcome! What would you like to chat about?",
+            "language": "english"
+        }
+    ]
 
 def detect_language(text):
     """改進的語言檢測"""
