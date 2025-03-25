@@ -5,6 +5,7 @@ import re
 import random
 import requests
 import concurrent.futures
+import itertools
 from deep_translator import GoogleTranslator
 
 app = Flask(__name__)
@@ -72,44 +73,28 @@ def load_json_from_google_drive(file_id):
         print(f"載入檔案 {file_id} 時出錯: {e}")
         return []
 
-def load_json_from_multiple_urls():
-    """從多個 Google Drive 連結載入資料"""
-    # 合併的資料列表
-    combined_data = []
-    
-    # 提取檔案 ID 並下載
-    def fetch_file(share_link):
-        try:
-            file_id = extract_file_id(share_link)
-            if file_id:
-                return load_json_from_google_drive(file_id)
-            print(f"無法從 {share_link} 提取檔案 ID")
-            return []
-        except Exception as e:
-            print(f"載入 {share_link} 時出錯: {e}")
-            return []
-    
-    # 使用 ThreadPoolExecutor 並行下載
-    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
-        # 提交所有下載任務
-        future_to_url = {executor.submit(fetch_file, url): url for url in SHARE_LINKS}
-        
-        # 處理每個下載結果
-        for future in concurrent.futures.as_completed(future_to_url):
-            url = future_to_url[future]
+def load_json_with_generator(max_items=5000):
+    """使用生成器載入資料，控制記憶體使用"""
+    def data_generator():
+        for share_link in SHARE_LINKS:
             try:
-                data = future.result()
-                combined_data.extend(data)
-                print(f"成功載入 {url}: {len(data)} 筆有效資料")
+                file_id = extract_file_id(share_link)
+                if file_id:
+                    file_data = load_json_from_google_drive(file_id)
+                    for item in file_data:
+                        yield item
+                        if max_items and max_items <= 0:
+                            return
+                    max_items -= len(file_data)
             except Exception as e:
-                print(f"處理 {url} 時出錯: {e}")
+                print(f"載入 {share_link} 時出錯: {e}")
     
-    print(f"總共成功載入 {len(combined_data)} 筆對話資料")
-    return combined_data
+    # 將生成器轉換為列表
+    return list(itertools.islice(data_generator(), max_items))
 
 # 載入資料
 try:
-    chatbot_data = load_json_from_multiple_urls()
+    chatbot_data = load_json_with_generator()
     if not chatbot_data:
         raise ValueError("未載入任何有效資料")
 except Exception as e:
@@ -124,9 +109,7 @@ except Exception as e:
         }
     ]
 
-# 剩餘的程式碼保持不變（detect_language、translate_text、find_semantic_matches 等函數）
-# 由於程式碼較長，這裡省略了這些部分，但與之前的版本完全相同
-
+# 其餘程式碼保持不變
 def detect_language(text):
     """改進的語言檢測"""
     if not text or not isinstance(text, str) or text.strip() == "":
@@ -197,7 +180,7 @@ def translate_text(text, source_lang='auto', target_lang='en'):
         print(f"翻譯出錯: {e}")
         return text
 
-# 其餘路由和主程式部分保持不變
+# 剩餘的路由和主程式部分保持不變
 @app.route('/')
 def serve_index():
     return send_from_directory('.', 'index.html')
