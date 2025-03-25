@@ -1,21 +1,40 @@
 from flask import Flask, send_from_directory, request, jsonify
 from flask_cors import CORS
 import json
+import os
+import glob
 import re
 import random
 from deep_translator import GoogleTranslator
-from werkzeug.urls import url_quote
 
 app = Flask(__name__)
 CORS(app)
 
-# 載入 JSON 資料
-try:
-    with open('output.json', 'r', encoding='utf-8') as f:
-        chatbot_data = json.load(f)
-except Exception as e:
-    print(f"載入 JSON 檔案時出錯: {e}")
-    chatbot_data = []
+def load_json_data():
+    """載入分割的 JSON 檔案"""
+    base_dir = os.path.dirname(__file__)
+    
+    # 使用字母排序模式
+    part_files = glob.glob(os.path.join(base_dir, "output_part[a-m].json"))
+    
+    # 依字母順序排序
+    part_files.sort()
+    
+    # 合併 JSON 資料
+    combined_data = []
+    for file in part_files:
+        try:
+            with open(file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                combined_data.extend(data)
+        except Exception as e:
+            print(f"載入 {file} 時出錯: {e}")
+    
+    print(f"成功載入 {len(combined_data)} 筆對話資料")
+    return combined_data
+
+# 載入資料
+chatbot_data = load_json_data()
 
 def detect_language(text):
     """改進的語言檢測"""
