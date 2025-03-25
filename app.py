@@ -1,119 +1,53 @@
-from flask import Flask, request, jsonify
-import json
+from flask import Flask, send_from_directory, request, jsonify
 from flask_cors import CORS
-import os
-import random
+import json
 import re
-import glob
-import sqlite3
+import random
 from deep_translator import GoogleTranslator
 
-# 創建 Flask 應用實例
 app = Flask(__name__)
-CORS(app)  # 允許跨域請求
+CORS(app)
 
-def init_database():
-    """初始化資料庫並載入數據"""
-    conn = sqlite3.connect('chatbot_data.db')
-    cursor = conn.cursor()
-    
-    # 創建表格
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS chatbot_responses (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        prompt TEXT,
-        response_a TEXT,
-        response_b TEXT,
-        language TEXT,
-        category TEXT
-    )
-    ''')
-    
-    # 檢查是否已有數據
-    cursor.execute('SELECT COUNT(*) FROM chatbot_responses')
-    if cursor.fetchone()[0] == 0:
-        # 載入 JSON 檔案
-        base_dir = os.path.dirname(__file__)
-        pattern = os.path.join(base_dir, "output_part*.json")
-        part_files = glob.glob(pattern)
-        
-        if not part_files:
-            print("找不到任何分割的 JSON 檔案！")
-            conn.close()
-            return
-        
-        # 根據檔名中數字排序
-        def extract_number(filename):
-            m = re.search(r'output_part(\d+)\.json', os.path.basename(filename))
-            return int(m.group(1)) if m else 0
-        
-        part_files.sort(key=extract_number)
-        
-        # 依序讀取每個檔案內容並插入資料庫
-        inserted_count = 0
-        for file in part_files:
-            with open(file, "r", encoding='utf-8') as f:
-                data = json.load(f)
-                for item in data:
-                    cursor.execute('''
-                    INSERT INTO chatbot_responses 
-                    (prompt, response_a, response_b, language, category) 
-                    VALUES (?, ?, ?, ?, ?)
-                    ''', (
-                        item.get('prompt', ''),
-                        item.get('response_a', ''),
-                        item.get('response_b', ''),
-                        item.get('language', 'unknown'),
-                        item.get('category', 'general')
-                    ))
-                    inserted_count += 1
-        
-        conn.commit()
-        print(f"成功載入 {inserted_count} 筆對話資料到資料庫")
-    
-    conn.close()
-
-# 初始化資料庫
-init_database()
+# 載入 JSON 資料
+try:
+    with open('output.json', 'r', encoding='utf-8') as f:
+        chatbot_data = json.load(f)
+except Exception as e:
+    print(f"載入 JSON 檔案時出錯: {e}")
+    chatbot_data = []
 
 def detect_language(text):
-    """改進的語言檢測，更可靠且細化"""
+    """改進的語言檢測"""
     if not text or not isinstance(text, str) or text.strip() == "":
         return "unknown"
     
-    # 清理和準備文本
     text = text.strip()
     
     # 計算不同語言字符的數量
     chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
     japanese_chars = len(re.findall(r'[\u3040-\u309f\u30a0-\u30ff]', text))
     korean_chars = len(re.findall(r'[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f\ua960-\ua97f\ud7b0-\ud7ff]', text))
-    russian_chars = len(re.findall(r'[\u0400-\u04ff]', text))
     
-    # 統計出現最多的字符類型
+    # 語言偵測邏輯
     lang_counts = {
         'chinese': chinese_chars,
         'japanese': japanese_chars,
-        'korean': korean_chars,
-        'russian': russian_chars
+        'korean': korean_chars
     }
     
-    # 如果有明顯的非英文字符占比，確定語言
+    # 如果有非英文字符
     total_non_english = sum(lang_counts.values())
     if total_non_english > 0:
         max_lang = max(lang_counts.items(), key=lambda x: x[1])
         if max_lang[1] > 0:
             return max_lang[0]
     
-    # 檢查是否包含拉丁字母字符
+    # 檢查拉丁字母
     latin_chars = len(re.findall(r'[a-zA-Z]', text))
-    if latin_chars > 0:
-        return 'english'
-    
-    return "unknown"
+    return 'english' if latin_chars > 0 else "unknown"
 
 def translate_text(text, source_lang='auto', target_lang='en'):
-    """使用 deep-translator 進行翻譯，增強穩健性"""
+    """使用 deep-translator 進行翻譯"""
     try:
         if not text or not isinstance(text, str) or text.strip() == "":
             return text
@@ -121,10 +55,9 @@ def translate_text(text, source_lang='auto', target_lang='en'):
         # 語言映射
         lang_map = {
             'chinese': 'zh-CN', 'english': 'en', 
-            'japanese': 'ja', 'korean': 'ko', 
-            'russian': 'ru', 'zh': 'zh-CN', 
-            'en': 'en', 'ja': 'ja', 
-            'ko': 'ko', 'ru': 'ru',
+            'japanese': 'ja', 'korean': 'ko',
+            'zh': 'zh-CN', 'en': 'en', 
+            'ja': 'ja', 'ko': 'ko',
             'unknown': 'en'
         }
         
@@ -154,14 +87,11 @@ def translate_text(text, source_lang='auto', target_lang='en'):
         return text
 
 def find_semantic_matches(query, language=None, top_n=3):
-    """使用資料庫進行語意匹配查詢"""
-    conn = sqlite3.connect('chatbot_data.db')
-    cursor = conn.cursor()
-    
-    # 偵測查詢語言
+    """語意匹配查詢"""
     original_query = query.strip()
     query_lower = original_query.lower()
     
+    # 偵測查詢語言
     if language == "auto" or not language:
         detected_lang = detect_language(query_lower)
     else:
@@ -182,52 +112,59 @@ def find_semantic_matches(query, language=None, top_n=3):
         if any(keyword in query_lower for keyword in keywords):
             query_categories.add(category)
     
-    # 準備查詢
-    base_query = """
-    SELECT prompt, response_a, response_b, language, 
-    (
-        CASE WHEN ? LIKE '%' || prompt || '%' THEN 50 ELSE 0 END +
-        (SELECT COUNT(*) FROM (
-            SELECT value FROM (
-                VALUES ('greeting'), ('mood_negative'), ('mood_positive'), 
-                       ('question'), ('technology')
-            ) AS categories(value)
-            WHERE value IN (
-                SELECT category FROM chatbot_responses 
-                WHERE prompt = base.prompt
-            )
-        )) * 20
-    ) AS score
-    FROM chatbot_responses AS base
-    WHERE language = ? OR language = 'unknown'
-    ORDER BY score DESC
-    LIMIT ?
-    """
-    
-    try:
-        # 執行查詢
-        cursor.execute(base_query, (query_lower, detected_lang, top_n))
-        results = cursor.fetchall()
+    # 評分和匹配邏輯
+    scored_items = []
+    for item in chatbot_data:
+        # 語言過濾
+        if language and language != "auto" and item.get('language', '').lower() != language.lower():
+            continue
         
-        # 格式化結果
-        matches = []
-        for row in results:
-            match = {
-                'prompt': row[0],
-                'response_a': row[1],
-                'response_b': row[2],
-                'language': row[3],
-                'score': row[4]
-            }
-            matches.append(match)
+        item_prompt = item['prompt'].lower()
+        score = 0
         
-        return matches
+        # 直接匹配
+        if query_lower == item_prompt:
+            item_copy = item.copy()
+            item_copy['score'] = 100
+            return [item_copy]
+        
+        # 類別匹配
+        item_categories = set()
+        for category, keywords in semantic_categories.items():
+            if any(keyword in item_prompt for keyword in keywords):
+                item_categories.add(category)
+        
+        # 類別重疊得分
+        common_categories = query_categories.intersection(item_categories)
+        score += len(common_categories) * 30
+        
+        # 詞彙重疊得分
+        item_words = set(item_prompt.split())
+        query_words = set(query_lower.split())
+        common_words = query_words.intersection(item_words)
+        score += len(common_words) * 5
+        
+        # 子字串匹配
+        if query_lower in item_prompt or item_prompt in query_lower:
+            score += 20
+        
+        # 長度相似度
+        length_ratio = min(len(query_lower), len(item_prompt)) / max(len(query_lower), len(item_prompt))
+        score += length_ratio * 15
+        
+        # 最低分數門檻
+        if score > 10:
+            item_copy = item.copy()
+            item_copy['score'] = score
+            scored_items.append(item_copy)
     
-    except Exception as e:
-        print(f"查詢出錯: {e}")
-        return []
-    finally:
-        conn.close()
+    # 排序和返回
+    scored_items.sort(key=lambda x: x.get('score', 0), reverse=True)
+    return scored_items[:top_n]
+
+@app.route('/')
+def serve_index():
+    return send_from_directory('.', 'index.html')
 
 @app.route('/api/get_responses', methods=['POST'])
 def get_responses():
@@ -253,8 +190,7 @@ def get_responses():
             # 語言映射
             lang_map = {
                 'chinese': 'zh-CN', 'english': 'en', 
-                'japanese': 'ja', 'korean': 'ko', 
-                'russian': 'ru'
+                'japanese': 'ja', 'korean': 'ko'
             }
             
             source = lang_map.get(best_match['language'], 'en')
@@ -285,45 +221,13 @@ def get_responses():
             return jsonify([best_match])
     
     # 若無匹配，返回隨機回應
-    return get_random_response(detected_lang)
-
-def get_random_response(detected_lang):
-    """取得隨機回應並翻譯"""
-    conn = sqlite3.connect('chatbot_data.db')
-    cursor = conn.cursor()
-    
     try:
-        # 隨機選取一筆回應
-        cursor.execute("""
-            SELECT prompt, response_a, response_b, language 
-            FROM chatbot_responses 
-            ORDER BY RANDOM() 
-            LIMIT 1
-        """)
-        row = cursor.fetchone()
+        random_response = random.choice(chatbot_data)
         
-        if not row:
-            return jsonify([])
+        # 翻譯隨機回應
+        source = random_response.get('language', 'en')
+        target = detected_lang
         
-        # 建立回應字典
-        random_response = {
-            'prompt': row[0],
-            'response_a': row[1],
-            'response_b': row[2],
-            'language': row[3]
-        }
-        
-        # 語言映射
-        lang_map = {
-            'chinese': 'zh-CN', 'english': 'en', 
-            'japanese': 'ja', 'korean': 'ko', 
-            'russian': 'ru'
-        }
-        
-        source = lang_map.get(random_response['language'], 'en')
-        target = lang_map.get(detected_lang, 'zh-CN')
-        
-        # 翻譯回應
         if random_response.get('response_a'):
             random_response['response_a'] = translate_text(
                 random_response['response_a'], 
@@ -338,60 +242,24 @@ def get_random_response(detected_lang):
                 target
             )
         
-        random_response['original_language'] = random_response['language']
-        random_response['language'] = detected_lang
+        random_response['original_language'] = source
+        random_response['language'] = target
         
         return jsonify([random_response])
     
     except Exception as e:
         print(f"隨機回應選取失敗: {e}")
         return jsonify([])
-    finally:
-        conn.close()
 
 @app.route('/api/languages', methods=['GET'])
 def get_languages():
     """取得可用語言列表"""
-    conn = sqlite3.connect('chatbot_data.db')
-    cursor = conn.cursor()
-    
-    try:
-        cursor.execute("SELECT DISTINCT language FROM chatbot_responses")
-        languages = [row[0] for row in cursor.fetchall() if row[0]]
-        languages.append("auto")
-        return jsonify(sorted(set(languages)))
-    
-    except Exception as e:
-        print(f"取得語言列表失敗: {e}")
-        return jsonify(["auto", "chinese", "english", "japanese", "korean"])
-    finally:
-        conn.close()
-
-@app.route('/api/search_diagnostic', methods=['GET'])
-def search_diagnostic():
-    """搜尋診斷接口"""
-    query = request.args.get('query', 'hello').lower()
-    limit = int(request.args.get('limit', 10))
-    
-    detected_lang = detect_language(query)
-    translated_query = None
-    if detected_lang != 'english':
-        translated_query = translate_text(query, detected_lang, 'english')
-    
-    semantic_matches = find_semantic_matches(query, None, limit)
-    
-    return jsonify({
-        'query': query,
-        'detected_language': detected_lang,
-        'translated_query': translated_query,
-        'semantic_matches': [
-            {
-                'prompt': item['prompt'],
-                'language': item.get('language', ''),
-                'score': item.get('score', 0)
-            } for item in semantic_matches
-        ]
-    })
+    languages = set()
+    for item in chatbot_data:
+        if 'language' in item and item['language']:
+            languages.add(item['language'])
+    languages.add("auto")
+    return jsonify(sorted(list(languages)))
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
